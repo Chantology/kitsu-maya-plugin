@@ -21,6 +21,23 @@ class KitsuConnectionError(Exception):
     """A specific, user-facing reason a Kitsu/Zou call failed."""
 
 
+def _sum_durations(entry):
+    """Coerce a `gazu.task.get_time_spent` per-person entry — of *whatever*
+    shape it actually turns out to be (a plain number, a single dict with
+    a "duration"/"total" key, or a list of either) — into one plain
+    number. Anything unrecognized contributes 0 rather than raising, so a
+    display bug here can never crash the UI it feeds."""
+    if entry is None:
+        return 0
+    if isinstance(entry, (int, float)):
+        return entry
+    if isinstance(entry, dict):
+        return entry.get("duration") or entry.get("total") or 0
+    if isinstance(entry, list):
+        return sum(_sum_durations(item) for item in entry)
+    return 0
+
+
 def _import_gazu():
     try:
         from . import _vendor  # side effect: prioritizes vendor/ on sys.path
@@ -182,11 +199,24 @@ class KitsuSession:
         you'd pick from a publish dropdown to move a task INTO."""
         return self.gazu.task.all_task_statuses(client=self.client)
 
-    def get_time_spent_today(self, task, date):
-        """Minutes the current (logged-in) user has already logged today
-        on this task. Read-only — used to confirm the time-tracking API
-        works before adding a way to log time from the plugin."""
-        return self.gazu.user.get_task_time_spent(task, date, client=self.client)
+    def get_time_spent_today(self, task, date, person_id):
+        """Minutes `person_id` has already logged today on this task, as a
+        plain int/float (never a dict/list/None) — always safe to
+        divide/multiply.
+
+        Uses `gazu.task.get_time_spent`, which is explicitly documented as
+        returning "a dict with person ID as key and time spent object as
+        value" — but "time spent object" turned out, against a real
+        server, to actually be a *list* of time-spent entries for that
+        person/day (not a single dict, and not a number either), so this
+        sums whatever's in there via `_sum_durations` rather than assuming
+        one specific shape (see the Blender/Nuke ports, where this was
+        caught first — this port originally used the
+        `gazu.user.get_task_time_spent` endpoint instead, which returned
+        an unrelated shape and silently read back 0 every time).
+        """
+        result = self.gazu.task.get_time_spent(task, date, client=self.client) or {}
+        return _sum_durations(result.get(person_id))
 
     def set_time_spent(self, task, person, date, duration_minutes):
         """Set (not add to) the total time `person` has logged on `task`

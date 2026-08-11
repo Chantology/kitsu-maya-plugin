@@ -60,6 +60,7 @@ class KitsuPanel(MayaQWidgetDockableMixin, QWidget):
 
         self.session = None
         self.project = None
+        self.current_user = None  # the logged-in Kitsu account (see _load_user_header)
         self.task = None
         self.task_breadcrumb = None  # resolved entity names, top-down (see task_detection.detect_task)
         self.task_context = None  # "asset" or "shot"
@@ -360,7 +361,13 @@ class KitsuPanel(MayaQWidgetDockableMixin, QWidget):
             QMessageBox.warning(self, "Kitsu", "Detect a task before logging time.")
             return
 
-        minutes = self.time_slider.value()
+        # The slider itself only snaps to _TIME_SLIDER_STEP_MINUTES when
+        # dragged by hand -- the auto-advance timer sets it minute-by-minute
+        # (see _on_time_tracking_tick), so a Log Time click mid-tick could
+        # otherwise submit an odd value like 80, which Kitsu's web
+        # timesheet then shows as a repeating decimal ("1.3333333h").
+        step = self._TIME_SLIDER_STEP_MINUTES
+        minutes = round(self.time_slider.value() / step) * step
         try:
             user = self.session.current_user()
         except Exception as exc:
@@ -550,13 +557,17 @@ class KitsuPanel(MayaQWidgetDockableMixin, QWidget):
         # Fetching the logged-in user's own name/avatar is a nice-to-have,
         # not something a login should fail over — any problem here just
         # leaves the greeting hidden, same as a project with no thumbnail.
+        # It doubles as the one place the logged-in account is resolved:
+        # the timesheet needs the person id to read back today's total.
         try:
             user = session.current_user()
         except Exception:
+            self.current_user = None
             self.user_welcome_label.setVisible(False)
             self.user_thumbnail_label.setVisible(False)
             return
 
+        self.current_user = user
         display_name = user.get("full_name") or user.get("email") or "there"
         self.user_welcome_label.setText(f"Welcome, {display_name}")
         self.user_welcome_label.setVisible(True)
@@ -853,14 +864,25 @@ class KitsuPanel(MayaQWidgetDockableMixin, QWidget):
 
     def _update_time_spent_today(self, task, restart_time_tracking=True):
         today = date.today().isoformat()
+        person_id = (self.current_user or {}).get("id")
+        if not person_id:
+            # Without knowing which account we are, there's no way to tell
+            # this user's own logged time apart from a colleague's on the
+            # same task — better to say so than to show someone else's.
+            self.task_time_spent_label.setText(
+                "Time logged today: unknown (the logged-in account could "
+                "not be resolved)"
+            )
+            self.task_time_spent_label.setVisible(True)
+            return
+
         try:
-            info = self.session.get_time_spent_today(task, today)
+            minutes = self.session.get_time_spent_today(task, today, person_id)
         except Exception as exc:
             self.task_time_spent_label.setText(f"Time logged today: could not load ({exc})")
             self.task_time_spent_label.setVisible(True)
             return
 
-        minutes = (info or {}).get("duration") or 0
         self.task_time_spent_label.setText(f"Time logged today: {self._format_minutes(minutes)}")
         self.task_time_spent_label.setVisible(True)
 
