@@ -24,6 +24,7 @@ from .qt import (
     QComboBox,
     QFileDialog,
     QFormLayout,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -44,12 +45,25 @@ from .qt import (
 from . import maya_scene, settings, video_annotations
 from .annotations import picture_annotation_objects, render_annotations
 from .collapsible_section import CollapsibleSection
-from .kitsu_api import KitsuConnectionError, KitsuSession
+from .kitsu_api import (
+    KitsuConnectionError,
+    KitsuSession,
+    TwoFactorRequired,
+    WrongTwoFactorCode,
+    two_factor_prompt,
+)
 from .task_detection import TaskDetectionError, TaskTypeMismatch, _path_is_shot_context, detect_task
 from .versioning import parse_version_number
 
 _OBJECT_NAME = "kitsuMayaPanel"
 _WORKSPACE_CONTROL = _OBJECT_NAME + "WorkspaceControl"
+
+# Display labels for kitsu_api.TWO_FACTOR_METHODS in the Method dropdown.
+_TWO_FACTOR_METHOD_LABELS = {
+    "totp": "Authenticator App",
+    "email_otp": "Email Code",
+    "recovery_code": "Recovery Code",
+}
 
 
 class KitsuPanel(MayaQWidgetDockableMixin, QWidget):
@@ -73,6 +87,10 @@ class KitsuPanel(MayaQWidgetDockableMixin, QWidget):
         self._preview_cache = {}  # preview (revision) id -> local file path
         self._pending_variations = []  # local image paths queued to publish (first = main preview, rest = variations)
         self._last_comment_ids = None  # ids currently rendered in comments_list, for change detection
+        # 2FA methods the server offered after the password was accepted
+        # (see kitsu_api.TwoFactorRequired). Non-empty = the Two-Factor
+        # Authentication box is showing and the next login sends a code.
+        self._two_factor_methods = []
 
         self._comment_poll_timer = QTimer(self)
         self._comment_poll_timer.setInterval(60_000)  # 60s: background auto-refresh, no need for finer
@@ -181,11 +199,87 @@ class KitsuPanel(MayaQWidgetDockableMixin, QWidget):
         self.user_thumbnail_label.setVisible(False)
         form.addRow(self.user_thumbnail_label)
 
+        form.addRow(self._build_two_factor_group())
+
         self.login_button = QPushButton("Login")
         self.login_button.clicked.connect(self._on_login_clicked)
         form.addRow(self.login_button)
 
         return group
+
+    def _build_two_factor_group(self):
+        """The Two-Factor Authentication box — hidden until a login's
+        password is accepted but the server asks for a code (see
+        _show_two_factor)."""
+        self.two_factor_group = QGroupBox("Two-Factor Authentication")
+        form = QFormLayout(self.two_factor_group)
+
+        self.two_factor_method_label = QLabel("Method")
+        self.two_factor_method_combo = QComboBox()
+        self.two_factor_method_combo.currentIndexChanged.connect(
+            self._on_two_factor_method_changed
+        )
+        form.addRow(self.two_factor_method_label, self.two_factor_method_combo)
+
+        self.two_factor_code_edit = QLineEdit()
+        self.two_factor_code_edit.setPlaceholderText("Two-factor code")
+        self.two_factor_code_edit.returnPressed.connect(self._on_login_clicked)
+        form.addRow("Code", self.two_factor_code_edit)
+
+        self.send_email_code_button = QPushButton("Send Code")
+        self.send_email_code_button.setToolTip("Email a new two-factor code to this account")
+        self.send_email_code_button.clicked.connect(self._on_send_email_code_clicked)
+        form.addRow(self.send_email_code_button)
+
+        self.two_factor_group.setVisible(False)
+        return self.two_factor_group
+
+    def _current_two_factor_method(self):
+        return self.two_factor_method_combo.currentData()
+
+    def _show_two_factor(self, methods, preferred):
+        """Reveal the 2FA box for `methods` with `preferred` selected and
+        an empty code field."""
+        self._two_factor_methods = list(methods)
+        self.two_factor_method_combo.blockSignals(True)
+        self.two_factor_method_combo.clear()
+        for method in self._two_factor_methods:
+            self.two_factor_method_combo.addItem(
+                _TWO_FACTOR_METHOD_LABELS.get(method, method), method
+            )
+        index = self.two_factor_method_combo.findData(preferred)
+        self.two_factor_method_combo.setCurrentIndex(max(index, 0))
+        self.two_factor_method_combo.blockSignals(False)
+
+        multiple = len(self._two_factor_methods) > 1
+        self.two_factor_method_label.setVisible(multiple)
+        self.two_factor_method_combo.setVisible(multiple)
+        self._update_send_email_code_visibility()
+        self.two_factor_code_edit.clear()
+        self.two_factor_group.setVisible(True)
+        self.login_button.setText("Verify & Log In")
+        self.two_factor_code_edit.setFocus()
+
+    def _hide_two_factor(self):
+        self._two_factor_methods = []
+        self.two_factor_code_edit.clear()
+        self.two_factor_group.setVisible(False)
+        self.login_button.setText("Login")
+
+    def _update_send_email_code_visibility(self):
+        self.send_email_code_button.setVisible(
+            self._current_two_factor_method() == "email_otp"
+        )
+
+    def _on_two_factor_method_changed(self, _index):
+        self._update_send_email_code_visibility()
+        method = self._current_two_factor_method()
+        # Switching to email codes doesn't send one by itself — there's
+        # a Send Code button for that, so a stray pick can't spam the inbox.
+        if method == "email_otp":
+            self._set_status("Click Send Code, then enter the emailed code and log in again.")
+        else:
+            self._set_status(two_factor_prompt(method))
 
     _PROJECT_THUMBNAIL_WIDTH = 120
 
@@ -517,24 +611,46 @@ class KitsuPanel(MayaQWidgetDockableMixin, QWidget):
             QMessageBox.warning(self, "Kitsu", "Please enter an email/password or an API token.")
             return
 
+        # Only sent once the server has asked for it (TwoFactorRequired below).
+        two_factor_method = None
+        two_factor_code = None
+        if self._two_factor_methods and not token:
+            two_factor_method = self._current_two_factor_method()
+            two_factor_code = self.two_factor_code_edit.text().strip()
+            if not two_factor_code:
+                self._set_status("Enter your two-factor code.", is_error=True)
+                return
+
         self._set_status("Connecting...")
         try:
             session = KitsuSession(server_url)
             if token:
                 session.login_with_token(token)
             else:
-                session.login(email, password)
+                session.login(email, password, two_factor_method, two_factor_code)
             project = session.project(project_id)
+        except TwoFactorRequired as exc:
+            # Password was right — reveal the code field and ask again.
+            self._show_two_factor(exc.methods, exc.preferred)
+            self._set_status(str(exc))
+            return
+        except WrongTwoFactorCode as exc:
+            self.two_factor_code_edit.clear()
+            self._set_status(str(exc), is_error=True)
+            return
         except KitsuConnectionError as exc:
+            self._hide_two_factor()
             self._set_status(str(exc), is_error=True)
             return
         except Exception as exc:
+            self._hide_two_factor()
             self._set_status(f"Unexpected error: {exc}", is_error=True)
             return
 
         self.session = session
         self.project = project
         self.password_edit.clear()
+        self._hide_two_factor()
 
         if not token:
             # Just logged in with email/password -- save the refresh token
@@ -550,6 +666,28 @@ class KitsuPanel(MayaQWidgetDockableMixin, QWidget):
         self._set_status(f"Connected to {session.host} — project '{project_name}'")
         self._populate_statuses()
         self._on_refresh_task_clicked()
+
+    def _on_send_email_code_clicked(self):
+        """Have Kitsu email a fresh 2FA code. Synchronous on the UI thread,
+        like the login itself — a single short request."""
+        server_url = self.server_edit.text().strip()
+        email = self.email_edit.text().strip()
+        if not (server_url and email):
+            QMessageBox.warning(self, "Kitsu", "Please fill in the server URL and email first.")
+            return
+
+        self._set_status("Sending code...")
+        # Let the status repaint before the request blocks the UI thread.
+        self.status_label.repaint()
+        try:
+            KitsuSession(server_url).send_email_code(email)
+        except KitsuConnectionError as exc:
+            self._set_status(str(exc), is_error=True)
+            return
+        except Exception as exc:
+            self._set_status(f"Unexpected error: {exc}", is_error=True)
+            return
+        self._set_status(two_factor_prompt("email_otp"))
 
     _USER_THUMBNAIL_WIDTH = 80
 
