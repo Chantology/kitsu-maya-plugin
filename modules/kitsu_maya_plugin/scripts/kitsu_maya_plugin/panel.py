@@ -592,7 +592,10 @@ class KitsuPanel(MayaQWidgetDockableMixin, QWidget):
 
     def _set_status(self, message, is_error=False):
         self.status_label.setText(message)
-        color = "#b00020" if is_error else "#0b7a0b"
+        # Both colors are picked for Maya's dark UI (#444444 panel): ~4.8:1
+        # contrast each, vs ~1.6-1.8:1 for the dark #b00020 / #0b7a0b used
+        # previously.
+        color = "#ff9999" if is_error else "#81c784"
         self.status_label.setStyleSheet(f"color: {color};")
 
     # ---- actions ----
@@ -1286,7 +1289,7 @@ class KitsuPanel(MayaQWidgetDockableMixin, QWidget):
         container_layout.addWidget(QLabel(caption))
 
         if has_drawover:
-            plane_button = QPushButton("Add as Image Plane")
+            plane_button = QPushButton("Add Overpaint as Image Plane")
             plane_button.setToolTip(
                 "Show this revision with its drawover as an image plane on "
                 "the active viewport's camera"

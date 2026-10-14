@@ -322,7 +322,7 @@ Collapsed/expanded state is remembered per section across Maya restarts.
      (annotations drawn during a review session — shapes, arrows,
      freehand markup, text notes) composited directly on top of the
      image, labeled "(with drawover)". If a revision has a drawover,
-     click **Add as Image Plane** to show it in the viewport as an image
+     click **Add Overpaint as Image Plane** to show it in the viewport as an image
      plane named `Feedback_<revision>` (e.g. `Feedback_2`), attached to
      the active viewport's camera — so you can reference the notes while
      working. Clicking it again for the same revision replaces that
