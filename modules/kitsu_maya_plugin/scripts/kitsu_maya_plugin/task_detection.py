@@ -30,6 +30,12 @@ is not. This avoids having to guess from ambiguous folder depths.
 Folder names are matched to Kitsu's names case-insensitively, since
 pipeline folder conventions (lowercase) commonly differ from how they're
 capitalized in Kitsu ("seq010" vs "SEQ010", "characters" vs "Characters").
+
+When a shot-context scene's folders don't resolve to a Kitsu shot (e.g.
+a TV-show project with no episode folder on disk), ShotNotFound is raised
+so the panel can offer a manual episode/sequence/shot picker (see
+ShotTree). detect_entity and resolve_task are detect_task's two halves,
+so a hand-picked shot or task type can replace either one.
 """
 
 import os
@@ -43,18 +49,44 @@ class TaskDetectionError(Exception):
 
 
 class TaskTypeMismatch(TaskDetectionError):
-    """Raised when the asset/shot resolved fine but its task-type folder
-    name didn't match any task type in Kitsu (or that entity has no Task
-    of the matched type yet) — callers can offer a manual task-type
-    picker instead of just reporting failure."""
+    """Raised when the asset/shot itself resolved fine but its task-type
+    folder name didn't match any task type in this project (or that
+    entity has no Task of the matched type yet) — callers can offer a
+    manual task-type picker instead of just reporting failure.
 
-    def __init__(self, entity, breadcrumb, task_type_name):
+    `breadcrumb` is the resolved entity's names, top-down, NOT including
+    the (unmatched) task type — e.g. ["characters", "Hero"] or
+    ["seq010", "sh0100"] or ["ep01", "seq010", "sh0100"]. `context` is
+    "asset" or "shot", same as detect_task's own return value, so callers
+    can still populate it once a task type is manually picked.
+    """
+
+    def __init__(self, entity, breadcrumb, task_type_name, context):
         super().__init__(
             f"Could not match task type {task_type_name!r} for "
             f"{' / '.join(breadcrumb)!r} against this project's task types."
         )
         self.entity = entity
         self.breadcrumb = breadcrumb
+        self.task_type_name = task_type_name
+        self.context = context
+
+
+class ShotNotFound(TaskDetectionError):
+    """Raised when a scene is in shot context but its folders don't map
+    onto a Kitsu episode/sequence/shot (e.g. a TV-show project whose
+    files live under `shots/<Seq>/<Shot>/...` with no episode folder) —
+    callers can offer a manual shot picker instead of just reporting
+    failure.
+
+    `reason` is the original lookup failure, for display. `task_type_name`
+    is the folder directly above the file, so once a shot is picked the
+    task type can still be resolved from it (see resolve_task).
+    """
+
+    def __init__(self, reason, task_type_name):
+        super().__init__(reason)
+        self.reason = reason
         self.task_type_name = task_type_name
 
 
@@ -101,23 +133,16 @@ def _find_by_name(items, name):
     return None
 
 
-def _resolve_task_type(session, project, entity, breadcrumb, task_type_name):
-    """Look up `task_type_name` among the project's task types.
-
-    Only called once the asset/shot itself has already resolved, so a
-    miss here means the entity is fine but its task-type folder name
-    isn't recognized — that's a `TaskTypeMismatch`, not a plain
-    `TaskDetectionError`, so callers can offer a manual override instead
-    of just failing outright."""
-    task_type = _find_by_name(
-        session.all_task_types_for_project(project), task_type_name
-    )
-    if task_type is None:
-        raise TaskTypeMismatch(entity, breadcrumb, task_type_name)
-    return task_type
+def task_type_folder_name(scene_path):
+    """The folder directly above the file -- by convention, the task type."""
+    return os.path.basename(os.path.dirname(scene_path)) or None
 
 
-def _detect_asset_task(session, project, scene_path):
+def is_shot_context(scene_path):
+    return bool(scene_path) and _path_is_shot_context(scene_path)
+
+
+def _detect_asset(session, project, scene_path):
     names = _folders_above(scene_path, 3)
     if names is None:
         raise TaskDetectionError(
@@ -142,41 +167,38 @@ def _detect_asset_task(session, project, scene_path):
             f"'{asset_type_name}' in this project."
         )
 
-    breadcrumb = [asset_type_name, asset_name]
-
-    task_type = _resolve_task_type(session, project, asset, breadcrumb, task_type_name)
-
-    task = session.get_task_by_entity(asset, task_type)
-    if task is None:
-        raise TaskTypeMismatch(asset, breadcrumb, task_type_name)
-
-    return task, breadcrumb + [task_type_name], "asset"
+    return asset, [asset_type_name, asset_name], task_type_name, "asset"
 
 
 def _has_episodes(project):
     return (project.get("production_type") or "").strip().casefold() == "tvshow"
 
 
-def _detect_shot_task(session, project, scene_path):
+def _detect_shot(session, project, scene_path):
     episodic = _has_episodes(project)
+    # The task-type folder is always the one directly above the file, so
+    # it's still known even when the levels above it don't resolve.
+    task_type_name = task_type_folder_name(scene_path)
 
     if episodic:
         names = _folders_above(scene_path, 4)
         if names is None:
-            raise TaskDetectionError(
+            raise ShotNotFound(
                 "This is a TV-show project, so an "
                 "'<Episode>/<Sequence>/<Shot>/<TaskType>/file' folder "
                 f"structure was expected above {scene_path!r}, but not all "
-                "four folder levels were found."
+                "four folder levels were found.",
+                task_type_name,
             )
         episode_name, sequence_name, shot_name, task_type_name = names
     else:
         names = _folders_above(scene_path, 3)
         if names is None:
-            raise TaskDetectionError(
+            raise ShotNotFound(
                 "Expected a '<Sequence>/<Shot>/<TaskType>/file' folder "
                 f"structure above {scene_path!r}, but couldn't find all "
-                "three folder levels."
+                "three folder levels.",
+                task_type_name,
             )
         episode_name = None
         sequence_name, shot_name, task_type_name = names
@@ -185,35 +207,154 @@ def _detect_shot_task(session, project, scene_path):
     if episodic:
         episode = session.get_episode_by_name(project, episode_name)
         if episode is None:
-            raise TaskDetectionError(
-                f"No episode named '{episode_name}' found in this project."
+            raise ShotNotFound(
+                f"No episode named '{episode_name}' found in this project.",
+                task_type_name,
             )
 
     sequence = session.get_sequence_by_name(project, sequence_name, episode=episode)
     if sequence is None:
         where = f"episode '{episode_name}'" if episodic else "this project"
-        raise TaskDetectionError(
-            f"No sequence named '{sequence_name}' found in {where}."
+        raise ShotNotFound(
+            f"No sequence named '{sequence_name}' found in {where}.",
+            task_type_name,
         )
 
     shot = session.get_shot_by_name(sequence, shot_name)
     if shot is None:
-        raise TaskDetectionError(
+        raise ShotNotFound(
             f"No shot named '{shot_name}' found under sequence "
-            f"'{sequence_name}'."
+            f"'{sequence_name}'.",
+            task_type_name,
         )
 
     breadcrumb = [sequence_name, shot_name]
     if episodic:
         breadcrumb.insert(0, episode_name)
 
-    task_type = _resolve_task_type(session, project, shot, breadcrumb, task_type_name)
+    return shot, breadcrumb, task_type_name, "shot"
 
-    task = session.get_task_by_entity(shot, task_type)
+
+def detect_entity(session, project, scene_path):
+    """First half of detect_task: resolve only the asset/shot.
+
+    Returns (entity, breadcrumb, task_type_name, context) -- breadcrumb
+    being the entity's names only, and task_type_name the (not yet
+    matched) task-type folder name. Raises ShotNotFound for a shot-context
+    scene whose folders don't resolve, TaskDetectionError otherwise.
+    """
+    if not scene_path:
+        raise TaskDetectionError(
+            "This scene has not been saved yet, so its folder can't be inspected."
+        )
+
+    if _path_is_shot_context(scene_path):
+        return _detect_shot(session, project, scene_path)
+    return _detect_asset(session, project, scene_path)
+
+
+def resolve_task(session, project, entity, breadcrumb, task_type_name, context):
+    """Second half of detect_task: find `entity`'s task matching the
+    task-type folder name. Raises TaskTypeMismatch when there's no
+    matching task type, or the entity has no task of that type."""
+    if not task_type_name:
+        raise TaskTypeMismatch(entity, breadcrumb, "", context)
+
+    task_type = _find_by_name(
+        session.all_task_types_for_project(project), task_type_name
+    )
+    if task_type is None:
+        raise TaskTypeMismatch(entity, breadcrumb, task_type_name, context)
+
+    task = session.get_task_by_entity(entity, task_type)
     if task is None:
-        raise TaskTypeMismatch(shot, breadcrumb, task_type_name)
+        raise TaskTypeMismatch(entity, breadcrumb, task_type_name, context)
 
-    return task, breadcrumb + [task_type_name], "shot"
+    return task, breadcrumb + [task_type_name], context
+
+
+def resolve_task_by_type_id(session, project, entity, breadcrumb, context, task_type_id):
+    """Like resolve_task, but for a task type picked by hand (by id).
+    Returns None instead of raising when the type no longer exists or
+    the entity has no task of that type, so callers can fall back to
+    normal folder matching."""
+    task_type = next(
+        (
+            t
+            for t in session.all_task_types_for_project(project)
+            if t.get("id") == task_type_id
+        ),
+        None,
+    )
+    if task_type is None:
+        return None
+    task = session.get_task_by_entity(entity, task_type)
+    if task is None:
+        return None
+    return task, breadcrumb + [task_type.get("name", "?")], context
+
+
+class ShotTree:
+    """The project's episodes, sequences and shots, for the manual
+    episode -> sequence -> shot picker. Built from three bulk requests
+    (see load) rather than per-shot lookups; shots link to their
+    sequence and sequences to their episode via `parent_id`."""
+
+    def __init__(self, episodes, sequences, shots):
+        def by_name(items):
+            return sorted(items, key=lambda i: (i.get("name") or "").casefold())
+
+        self._episodes = by_name(episodes)
+        self._sequences = by_name(sequences)
+        self._shots = by_name(shots)
+        self._episodes_by_id = {e["id"]: e for e in self._episodes}
+        self._sequences_by_id = {s["id"]: s for s in self._sequences}
+        self._shots_by_id = {s["id"]: s for s in self._shots}
+
+    @classmethod
+    def load(cls, session, project):
+        return cls(
+            session.all_episodes_for_project(project) or [],
+            session.all_sequences_for_project(project) or [],
+            session.all_shots_for_project(project) or [],
+        )
+
+    @property
+    def episodic(self):
+        return bool(self._episodes)
+
+    def episodes(self):
+        return list(self._episodes)
+
+    def sequences(self, episode_id=None):
+        """Sequences of `episode_id`, or all of them for a project
+        without episodes."""
+        if not self.episodic:
+            return list(self._sequences)
+        return [s for s in self._sequences if s.get("parent_id") == episode_id]
+
+    def shots(self, sequence_id):
+        return [s for s in self._shots if s.get("parent_id") == sequence_id]
+
+    def find_shot(self, shot_id):
+        return self._shots_by_id.get(shot_id)
+
+    def parents(self, shot):
+        """(episode, sequence) dicts of `shot`; either may be None."""
+        sequence = self._sequences_by_id.get(shot.get("parent_id"))
+        episode = None
+        if sequence is not None:
+            episode = self._episodes_by_id.get(sequence.get("parent_id"))
+        return episode, sequence
+
+    def breadcrumb(self, shot):
+        episode, sequence = self.parents(shot)
+        names = [shot.get("name", "?")]
+        if sequence is not None:
+            names.insert(0, sequence.get("name", "?"))
+        if episode is not None:
+            names.insert(0, episode.get("name", "?"))
+        return names
 
 
 def detect_task(session, project, scene_path):
@@ -229,11 +370,7 @@ def detect_task(session, project, scene_path):
         ["ep01", "seq010", "sh0100", "animation"]), and context is
         "asset" or "shot".
     """
-    if not scene_path:
-        raise TaskDetectionError(
-            "This scene has not been saved yet, so its folder can't be inspected."
-        )
-
-    if _path_is_shot_context(scene_path):
-        return _detect_shot_task(session, project, scene_path)
-    return _detect_asset_task(session, project, scene_path)
+    entity, breadcrumb, task_type_name, context = detect_entity(
+        session, project, scene_path
+    )
+    return resolve_task(session, project, entity, breadcrumb, task_type_name, context)

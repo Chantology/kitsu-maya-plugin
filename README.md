@@ -244,8 +244,23 @@ Collapsed/expanded state is remembered per section across Maya restarts.
    (unchanged from before). It decides whether shots sit **under
    episodes** from the *project itself* — only a Kitsu `tvshow` production
    has episodes, so for a TV-show project the extra `<Episode>` level is
-   required and for a movie/short/commercial it must be absent. The
-   detected breadcrumb (e.g. `seq010 / sh0100 / animation` or
+   required and for a movie/short/commercial it must be absent.
+
+   If the folders don't resolve, the panel shows a **task picker** instead
+   of just failing. This covers a shot whose folders don't map to Kitsu,
+   for example a TV-show project with no episode folder on disk. It also
+   covers a task-type folder that matches no task in Kitsu. The picker has
+   cascading **Episode → Sequence → Shot** dropdowns (the episode row only
+   appears for projects with episodes) and a **Task Type** dropdown.
+   **Change Task...** opens the same picker at any time, so you can switch
+   to a different shot or task type by hand.
+
+   Manual picks are remembered for that exact file path. They take
+   precedence over folder detection on later Detect Task clicks, and the
+   breadcrumb is marked "(set manually)". **Reset to Folder Detection** in
+   the picker forgets them.
+
+   The detected breadcrumb (e.g. `seq010 / sh0100 / animation` or
    `ep01 / seq010 / sh0100 / animation`) is shown in the Task section,
    along with the task's current **Status**, **Due Date** ("Not set" if
    Kitsu has none) — resolved against your project's own configured
@@ -375,8 +390,10 @@ production doesn't define one.
    **Variations**: before clicking Publish, queue extra images with
    **+ From Viewport** (captures the current view right now, e.g. after
    toggling a render layer or display layer) or **+ From File...**
-   (browse for an existing image, e.g. exported from another app) —
-   listed above the Publish button, with **Remove Selected** to drop one
+   (browse for an existing image, e.g. exported from another app, or an
+   **MP4/MOV video**, e.g. one rendered on the farm; a video is always
+   moved to the front, so it becomes the main preview of the new
+   revision) — listed above the Publish button, with **Remove Selected** to drop one
    before publishing. These are uploaded alongside the main capture as
    additional preview files on the **same revision/comment** (Kitsu's own
    multi-preview-per-revision support) — not separate revisions and not

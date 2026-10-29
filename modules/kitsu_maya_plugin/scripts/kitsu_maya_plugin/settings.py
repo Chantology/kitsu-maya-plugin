@@ -45,21 +45,48 @@ def save_section_collapsed(name, collapsed):
     settings.setValue(f"section_collapsed_{name}", collapsed)
 
 
-def _task_type_override_key(scene_path):
+def _override_key(kind, scene_path):
     digest = hashlib.sha1(scene_path.encode("utf-8")).hexdigest()
-    return f"task_type_override_{digest}"
+    return f"{kind}_override_{digest}"
+
+
+def _load_override(kind, scene_path):
+    settings = QSettings(_ORG, _APP)
+    value = settings.value(_override_key(kind, scene_path), "")
+    return value or None
+
+
+def _save_override(kind, scene_path, entity_id):
+    settings = QSettings(_ORG, _APP)
+    settings.setValue(_override_key(kind, scene_path), entity_id)
+    settings.sync()
 
 
 def load_task_type_override(scene_path):
     """Return the manually-picked task-type id remembered for this exact
     file path, or None if there isn't one (e.g. never set, or the file
     was since renamed/moved — falls back to normal folder detection)."""
-    settings = QSettings(_ORG, _APP)
-    value = settings.value(_task_type_override_key(scene_path), "") or ""
-    return value or None
+    return _load_override("task_type", scene_path)
 
 
 def save_task_type_override(scene_path, task_type_id):
+    _save_override("task_type", scene_path, task_type_id)
+
+
+def load_shot_override(scene_path):
+    """Return the manually-picked shot id remembered for this exact file
+    path, or None — same lifetime rules as load_task_type_override."""
+    return _load_override("shot", scene_path)
+
+
+def save_shot_override(scene_path, shot_id):
+    _save_override("shot", scene_path, shot_id)
+
+
+def clear_overrides(scene_path):
+    """Forget both manual picks for this file, so detection goes back to
+    reading its folders."""
     settings = QSettings(_ORG, _APP)
-    settings.setValue(_task_type_override_key(scene_path), task_type_id)
+    for kind in ("shot", "task_type"):
+        settings.remove(_override_key(kind, scene_path))
     settings.sync()
