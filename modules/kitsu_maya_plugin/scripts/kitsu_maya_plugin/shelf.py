@@ -1,9 +1,9 @@
 """Adds an optional Maya shelf button that opens the Kitsu panel.
 
-Not required for the plug-in to work — the "Kitsu/Zou" menu (added by
+Not required for the plug-in to work — the "Kitsu" menu (added by
 kitsuMayaPlugin.py) already opens the panel. This is a convenience for
 anyone who wants a persistent, one-click shelf icon instead of going
-through the menu each time, wired up via the "Kitsu/Zou > Add Shelf
+through the menu each time, wired up via the "Kitsu > Add Shelf
 Button" menu entry.
 
 The icon (icons/kitsu_maya_plugin.png, plus an @2x variant for HiDPI) is

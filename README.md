@@ -34,7 +34,7 @@ modules/
   kitsu_maya_plugin.mod            # module descriptor Maya reads at startup
   kitsu_maya_plugin/               # the module
     plug-ins/
-      kitsuMayaPlugin.py           # plug-in entry point: adds the "Kitsu/Zou" menu
+      kitsuMayaPlugin.py           # plug-in entry point: adds the "Kitsu" menu
     icons/
       kitsu_maya_plugin.png        # shelf button icon: the Kitsu fox logo (32x32, plus @2x for HiDPI)
       kitsu_maya_plugin@2x.png
@@ -48,8 +48,8 @@ modules/
         task_detection.py          # resolves asset/task from folder structure
         maya_scene.py              # scene path, viewport capture, image planes, timeline bookmarks
         video_annotations.py       # per-frame drawover extraction for video previews
-        shelf.py                   # optional shelf button ("Kitsu/Zou > Add Shelf Button")
-        publish_capture.py         # "Kitsu/Zou > Publish Capture": full-scene video export + Kitsu upload
+        shelf.py                   # optional shelf button ("Kitsu > Add Shelf Button")
+        publish_capture.py         # "Kitsu > Publish Capture": full-scene video export + Kitsu upload
         capture_dialog.py          # status/comment dialog shown before a Publish Capture export
         capture_naming.py          # studio review-file naming convention for Publish Capture
         video_export.py            # PNG sequence -> H.264 MP4 via ffmpeg
@@ -103,8 +103,8 @@ to the script instead, e.g. `install_linux.sh /path/to/your/modules`.
 2. Restart Maya.
 3. Go to **Windows → Settings/Preferences → Plug-in Manager**, find
    `kitsuMayaPlugin.py`, and check both **Loaded** and **Auto load**.
-4. A **"Kitsu/Zou"** entry appears in the main menu bar, next to Help.
-   Click **Kitsu/Zou → Open Kitsu Panel** to open the panel — it docks on
+4. A **"Kitsu"** entry appears in the main menu bar, next to Help.
+   Click **Kitsu → Open Kitsu Panel** to open the panel — it docks on
    the right like the Attribute Editor, and can be re-docked/tabbed
    anywhere.
 
@@ -136,7 +136,7 @@ remove from your Python environment.
 ## Shelf integration
 
 The menu is enough to use the plugin, but a shelf button is one click
-closer. Click **Kitsu/Zou → Add Shelf Button** to add a "Kitsu" icon to
+closer. Click **Kitsu → Add Shelf Button** to add a "Kitsu" icon to
 the currently active shelf — it opens the panel exactly like the menu
 entry (loading the plug-in first if it isn't already), and clicking it
 again on the same shelf replaces the old button rather than duplicating
@@ -409,7 +409,7 @@ production doesn't define one.
 
 The Publish button above exports a single frame. For a full-scene H.264
 MP4 of your current playback range, published to Kitsu as a new
-revision, use **Kitsu/Zou → Publish Capture** in the main menu.
+revision, use **Kitsu → Publish Capture** in the main menu.
 
 1. **Requirements**: the panel must already be open, logged in, and have
    a task detected (Publish Capture reuses that state rather than asking

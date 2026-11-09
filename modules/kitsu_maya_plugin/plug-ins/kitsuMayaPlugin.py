@@ -1,7 +1,7 @@
 """Maya plug-in entry point for the Kitsu/Zou integration.
 
 Loading this plug-in (Windows > Settings/Preferences > Plug-in Manager >
-kitsuMayaPlugin.py) adds a top-level "Kitsu/Zou" menu to Maya's main
+kitsuMayaPlugin.py) adds a top-level "Kitsu" menu to Maya's main
 window; unloading removes it again. The actual panel code lives in the
 `kitsu_maya_plugin` Python package (this module's scripts/ sibling, put
 on the path by the .mod file) and is only imported when the menu entry is
@@ -30,7 +30,7 @@ def _build_menu(*_args):
     if cmds.menu(_MENU, exists=True):
         cmds.deleteUI(_MENU, menu=True)
     main_window = mel.eval("$kitsuTmpMainWindow = $gMainWindow;")
-    cmds.menu(_MENU, label="Kitsu/Zou", parent=main_window, tearOff=False)
+    cmds.menu(_MENU, label="Kitsu", parent=main_window, tearOff=False)
     cmds.menuItem(label="Open Kitsu Panel", parent=_MENU, command=_open_panel)
     cmds.menuItem(label="Add Shelf Button", parent=_MENU, command=_add_shelf_button)
     cmds.menuItem(label="Publish Capture", parent=_MENU, command=_publish_capture)
